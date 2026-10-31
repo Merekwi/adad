@@ -1,29 +1,80 @@
-async function askModel(prompt) {
-  if (!ready) { addMsg('Система', 'Модель ещё загружается...', 'sys'); return; }
-  addMsg('NetErrror', '▌ Генерация...', 'sys');
-  try {
-    const reply = await engine.chat.completions.create({
-      messages: [
-        { role: 'system', content: buildSystem() },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.9,
-      max_tokens: 1024
+}
     });
-    chat.lastChild.remove();
-    addMsg('NetErrror', reply.choices[0].message.content, 'ai');
+    backend = 'webllm';
+    ready = true;
+    status.textContent = '✓ WebLLM готов. Введите запрос.';
+    return;
   } catch (e) {
-    chat.lastChild.remove();
+    console.error('WebLLM fail:', e);
+    status.textContent = 'WebLLM не запустился: ' + e.message + '. Пробую Ollama...';
+  }
+
+  // 3) Fallback на Ollama
+  return initOllama();
+}
+
+async function initOllama() {
+  try {
+    const r = await fetch('http://localhost:11434/api/tags', { method:'GET' });
+    if (!r.ok) throw new Error('Ollama не отвечает');
+    const data = await r.json();
+    if (!data.models || !data.models.length) throw new Error('В Ollama нет моделей');
+    backend = 'ollama';
+    ready = true;
+    status.textContent = '✓ Ollama готов (' + data.models[0].name + '). Введите запрос.';
+  } catch (e) {
+    status.textContent = '✗ Нет ни WebGPU, ни Ollama. Установи Chrome 113+ или запусти Ollama.';
+    addMsg('Система', 'Не удалось подключить нейросеть: ' + e.message, 'err');
+  }
+}
+
+initBackend();
+
+// ---------- Запрос ----------
+async function askModel(prompt) {
+  if (!ready) { addMsg('Система', 'Модель ещё не готова.', 'sys'); return; }
+  const loading = addMsg('NetErrror', '▌ Генерация...', 'sys');
+  try {
+    let text = '';
+    if (backend === 'webllm') {
+      const reply = await engine.chat.completions.create({
+        messages: [
+          { role:'system', content: buildSystem() },
+          { role:'user', content: prompt }
+        ],
+        temperature: 0.9,
+        max_tokens: 1024
+      });
+      text = reply.choices[0].message.content;
+    } else if (backend === 'ollama') {
+      const r = await fetch('http://localhost:11434/api/generate', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          model: 'llama3',
+          system: buildSystem(),
+          prompt: prompt,
+          stream: false
+        })
+      });
+      const data = await r.json();
+      text = data.response;
+    }
+    loading.remove();
+    addMsg('NetErrror', text, 'ai');
+  } catch (e) {
+    loading.remove();
     addMsg('Ошибка', e.message, 'err');
   }
 }
 
+// ---------- Команды ----------
 function handleCommand(line) {
   const parts = line.trim().split(/\s+/);
   const cmd = parts[0];
   let arg = parseInt(parts[1]);
   if (isNaN(arg)) arg = null;
-  const map = { '/trolling':'trolling', '/low':'low', '/high':'high', '/monologue':'monologue', '/multi':'multi', '/battle':'battle' };
+  const map = { '/trolling':'trolling','/low':'low','/high':'high','/monologue':'monologue','/multi':'multi','/battle':'battle' };
   if (cmd === '/unlock') {
     state.unlock = !state.unlock;
     addMsg('Система', state.unlock ? 'Режим без цензуры активирован.' : 'Режим без цензуры отключён.', 'sys');
@@ -32,7 +83,7 @@ function handleCommand(line) {
     if (state[key] > 0) { state[key] = 0; addMsg('Система', cmd + ' отключён.', 'sys'); }
     else { state[key] = arg || 5; addMsg('Система', cmd + ' активирован (уровень ' + state[key] + ').', 'sys'); }
   } else if (cmd === '/reset') {
-    Object.assign(state, { unlock:false, trolling:0, low:0, high:0, monologue:0, multi:0, battle:0 });
+    Object.assign(state, {unlock:false,trolling:0,low:0,high:0,monologue:0,multi:0,battle:0});
     addMsg('Система', 'Все настройки сброшены.', 'sys');
   } else if (cmd === '/info') {
     addMsg('Система', 'Команды: /unlock /trolling /low /high /monologue /multi /battle /reset /info', 'sys');
@@ -51,9 +102,9 @@ function send() {
 }
 
 document.getElementById('send').onclick = send;
-input.addEventListener('keydown', function(e) { if (e.key === 'Enter') send(); });
-document.querySelectorAll('#cmds button').forEach(function(b) {
-  b.onclick = function() { input.value = b.dataset.cmd; send(); };
+input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+document.querySelectorAll('#cmds button').forEach(b => {
+  b.onclick = () => { input.value = b.dataset.cmd; send(); };
 });
 </script>
 </body>
